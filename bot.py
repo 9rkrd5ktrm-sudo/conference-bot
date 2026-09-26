@@ -1,14 +1,23 @@
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
-import sqlite3
 import time
 import os
 from datetime import datetime
 
-# ======== ТОКЕН И ID ГРУППЫ ========
+# ======== GOOGLE SHEETS ========
+import gspread
+from google.oauth2.service_account import Credentials
+
+# ======== НАСТРОЙКИ ========
 TOKEN = "vk1.a.VGjAHYDuV0YBY2hKZsNNoldS1o9Ce-83n6ROFJj0M5GJPVyqufFIdvLH-oJbXBzUCEFR0VXIMT-IqW6zfdRhxAAolq3_pjmh6h8wAgpHQpZanvAFpKblN8-d_lUB8N-jj5xnGJHNage0wy4y7totMCRgFu1TCjXdMX7FqcjWlO4_xBgIVfy9sPuwiCeKm54cjdP1xU9iWBhL4oBv3oVnMA" 
 GROUP_ID = 237002976 
+
+# Имя JSON-файла с ключом (скачанный из Google Cloud)
+CREDENTIALS_FILE = "conference-bot-509819-9f3bcb06f4f6.json"  
+
+# ID вашей Google Таблицы (из адресной строки)
+SPREADSHEET_ID = "13xpZNAsVqi-k22uf_XMa2G0ASbxCi4JsPCAJ8HicQIg" 
 
 # ======== ПОДКЛЮЧЕНИЕ К ВК ========
 vk_session = vk_api.VkApi(token=TOKEN)
@@ -17,82 +26,56 @@ vk = vk_session.get_api()
 
 users = {}
 
-# ======== РАБОТА С EXCEL ========
+# ======== ПОДКЛЮЧЕНИЕ К GOOGLE SHEETS ========
 try:
-    from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-    EXCEL_AVAILABLE = True
-except ImportError:
-    print("⚠️ openpyxl не установлена! Установите: pip3 install openpyxl")
-    EXCEL_AVAILABLE = False
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+    print("✅ Подключение к Google Sheets установлено")
+except Exception as e:
+    import traceback
+    print(f"❌ ОШИБКА: {type(e).__name__}")
+    print(f"❌ Сообщение: {e}")
+    traceback.print_exc()
+    sheet = None
 
-EXCEL_FILE = "заявки.xlsx"
-
-def create_excel():
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Заявки"
-    
-    header_fill = PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid")
-    header_font = Font(bold=True, size=12, color="FFFFFF")
-    center_align = Alignment(horizontal="center", vertical="center")
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
-                         top=Side(style='thin'), bottom=Side(style='thin'))
-    
-    headers = ["№", "Дата", "ФИО", "Соавтор", "Учебное заведение", 
-               "Образование", "Секция", "Название статьи", "Руководитель", 
-               "Файл статьи", "Справка антиплагиат", "Презентация"]
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = center_align
-        cell.border = thin_border
-    
-    ws.column_dimensions['A'].width = 5
-    ws.column_dimensions['B'].width = 18
-    ws.column_dimensions['C'].width = 25
-    ws.column_dimensions['D'].width = 25
-    ws.column_dimensions['E'].width = 30
-    ws.column_dimensions['F'].width = 15
-    ws.column_dimensions['G'].width = 60
-    ws.column_dimensions['H'].width = 40
-    ws.column_dimensions['I'].width = 25
-    ws.column_dimensions['J'].width = 40
-    ws.column_dimensions['K'].width = 40
-    ws.column_dimensions['L'].width = 40
-    
-    wb.save(EXCEL_FILE)
-
-def add_to_excel(data):
-    if not EXCEL_AVAILABLE:
+def add_to_sheets(data):
+    """Добавляет новую заявку в Google Таблицу"""
+    if sheet is None:
+        print("❌ Нет подключения к Google Sheets")
         return
     
-    if not os.path.exists(EXCEL_FILE):
-        create_excel()
-    
     try:
-        wb = load_workbook(EXCEL_FILE)
-        ws = wb.active
-        row = ws.max_row + 1
+        # Если таблица пустая — добавляем шапку
+        if not sheet.get_all_values():
+            sheet.append_row([
+                "№", "Дата", "ФИО", "Соавтор", "Учебное заведение",
+                "Образование", "Секция", "Название статьи", "Руководитель",
+                "Файл статьи", "Справка антиплагиат", "Презентация"
+            ])
         
-        ws.cell(row=row, column=1, value=row - 1)
-        ws.cell(row=row, column=2, value=datetime.now().strftime("%d.%m.%Y %H:%M"))
-        ws.cell(row=row, column=3, value=data.get("full_name", ""))
-        ws.cell(row=row, column=4, value=data.get("co_author", ""))
-        ws.cell(row=row, column=5, value=data.get("university", ""))
-        ws.cell(row=row, column=6, value=data.get("education", ""))
-        ws.cell(row=row, column=7, value=data.get("section", ""))
-        ws.cell(row=row, column=8, value=data.get("article_title", ""))
-        ws.cell(row=row, column=9, value=data.get("supervisor", ""))
-        ws.cell(row=row, column=10, value=data.get("file_url", ""))
-        ws.cell(row=row, column=11, value=data.get("plagiat_url", ""))
-        ws.cell(row=row, column=12, value=data.get("presentation_url", ""))
-        
-        wb.save(EXCEL_FILE)
-        print(f"✅ Заявка #{row-1} добавлена в Excel")
+        # Добавляем новую строку
+        sheet.append_row([
+            len(sheet.get_all_values()),
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            data.get("full_name", ""),
+            data.get("co_author", ""),
+            data.get("university", ""),
+            data.get("education", ""),
+            data.get("section", ""),
+            data.get("article_title", ""),
+            data.get("supervisor", ""),
+            data.get("file_url", ""),
+            data.get("plagiat_url", ""),
+            data.get("presentation_url", "")
+        ])
+        print(f"✅ Заявка добавлена в Google Таблицу")
     except Exception as e:
-        print(f"Ошибка записи в Excel: {e}")
+        print(f"❌ Ошибка записи в Google Таблицу: {e}")
 
 # ======== КЛАВИАТУРЫ ========
 def education_keyboard():
@@ -145,7 +128,7 @@ def send(user_id, text, keyboard=None):
 
 # ======== ГЛАВНЫЙ ЦИКЛ ========
 print("✅ БОТ ЗАПУЩЕН!")
-print(f"📊 Данные сохраняются в файл: {EXCEL_FILE}")
+print("📊 Данные сохраняются в Google Таблицу")
 print("⚠️ Руководитель и файлы (шаги 7-10) — ОБЯЗАТЕЛЬНЫ!")
 
 for event in longpoll.listen():
@@ -188,7 +171,7 @@ for event in longpoll.listen():
             data["step"] = 2
             send(user_id, "✅ Шаг 2/10: Укажите ФИО соавтора (или нажмите 'Пропустить')", skip_keyboard())
         
-        # ===== ШАГ 2: СОАВТОР (можно пропустить) =====
+        # ===== ШАГ 2: СОАВТОР =====
         elif step == 2:
             data["co_author"] = "Нет" if text == "Пропустить" else text
             data["step"] = 3
@@ -245,7 +228,6 @@ for event in longpoll.listen():
         
         # ===== ШАГ 7: РУКОВОДИТЕЛЬ (ОБЯЗАТЕЛЬНО) =====
         elif step == 7:
-            # Если пользователь написал "Пропустить" — не пропускаем
             if text == "Пропустить":
                 send(user_id, 
                     "⚠️ Научного руководителя нельзя пропустить!\n\n"
@@ -341,7 +323,7 @@ for event in longpoll.listen():
                         data["presentation_url"] = f"https://vk.com/doc{doc['owner_id']}_{doc['id']}"
                         file_found = True
                         
-                        add_to_excel(data)
+                        add_to_sheets(data)
                         
                         send(user_id,
                             "✅ РЕГИСТРАЦИЯ УСПЕШНО ЗАВЕРШЕНА!\n\n"
@@ -377,3 +359,4 @@ for event in longpoll.listen():
                     "⚠️ Презентация обязательна!\n\n"
                     "📊 Прикрепите файл в формате PowerPoint (.ppt или .pptx)",
                     cancel_keyboard())
+            
